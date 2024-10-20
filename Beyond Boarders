@@ -14,31 +14,28 @@ BEGIN
 END;	
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.bucket_select_campaign(campaign_id bigint, bucket character varying DEFAULT NULL::character varying)
- RETURNS TABLE(id bigint, bucket_name character varying)
+CREATE OR REPLACE FUNCTION beyond_boarders.campaign_delete_client(campaign_id bigint, user_id bigint DEFAULT NULL::bigint)
+ RETURNS integer
  LANGUAGE plpgsql
 AS $function$
-	
-BEGIN
 
-	RETURN QUERY 
-	SELECT 
-		b.id, b.name
-	FROM  
-		beyond_boarders.campaign c
-	LEFT JOIN
-		beyond_boarders.campaign_bucket cb ON c.id = cb.campaign_id
-	LEFT JOIN
-		beyond_boarders.bucket b ON b.id = cb.bucket_id
-	WHERE 
-		c.id = $1
-	AND
-		($2 ISNULL OR b.name ilike '%' || $2 || '%')
- 	AND 
-	 	b.isdeleted = false
-	ORDER BY b.created_date DESC;
+DECLARE
+
+	_campaign_id bigint;
 	
-END;	
+BEGIN	
+
+	UPDATE 
+		beyond_boarders.campaign
+	SET 
+		isdeleted = true
+	AND
+		last_touched_by = $2
+	WHERE id = $1;
+	
+	RETURN $1;
+	
+END;
 $function$
 ;
 CREATE OR REPLACE FUNCTION beyond_boarders.role_select_roles(campaign_id bigint DEFAULT NULL::bigint)
@@ -67,6 +64,29 @@ BEGIN
 END;	
 $function$
 ;
+CREATE OR REPLACE FUNCTION beyond_boarders.client_upsert_clients(client character varying DEFAULT NULL::character varying, user_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+
+	_client_id bigint = COALESCE($3,(SELECT nextval('beyond_boarders.client_id_seq'::regclass))) ;
+
+BEGIN	
+
+	INSERT INTO beyond_boarders.client(id, name, last_touched_by)
+	VALUES (_client_id, $1, $2)
+	ON CONFLICT ON CONSTRAINT client_pkey
+			DO UPDATE 
+			SET name = $1,
+				last_touched_by = $2;
+
+	RETURN _client_id;
+	
+END;
+$function$
+;
 CREATE OR REPLACE FUNCTION beyond_boarders.bucket_delete_campaign(bucket_id bigint)
  RETURNS integer
  LANGUAGE plpgsql
@@ -84,26 +104,30 @@ BEGIN
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.mapping_select_fields(client character varying, bb_table character varying DEFAULT NULL::character varying)
- RETURNS TABLE(table_name character varying, field_name character varying, column_number bigint, sort bigint, endorsement_header character varying)
+CREATE OR REPLACE FUNCTION beyond_boarders.bucket_select_campaign(campaign_id bigint, bucket_name character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(id bigint, name character varying)
  LANGUAGE plpgsql
 AS $function$
-DECLARE
-
-	_client_id bigint = (SELECT c.id FROM beyond_boarders.campaign c WHERE c.name = $1);
 	
 BEGIN
 
 	RETURN QUERY 
 	SELECT 
-		fm.table_name, fm.field_name,em.column_number, fm.sort, em.endorsement_header
+		b.id, b.name
 	FROM  
-		beyond_boarders.field_mapping fm
-	LEFT JOIN 
-		beyond_boarders.endorsement_mapping em	ON fm.id = em.field_mapping_id and company_id = _client_id 
-	--WHERE
-	--	($2 ISNULL OR fm.table_name = $2) --em.column_number = $2
-	ORDER BY fm.sort;
+		beyond_boarders.campaign c
+	LEFT JOIN
+		beyond_boarders.campaign_bucket cb ON c.id = cb.campaign_id
+	LEFT JOIN
+		beyond_boarders.bucket b ON b.id = cb.bucket_id
+	WHERE 
+		c.id = $1
+	AND
+		($2 ISNULL OR b.name ilike '%' || $2 || '%')
+ 	AND 
+	 	b.isdeleted = false
+	ORDER BY b.created_date DESC;
+	
 END;	
 $function$
 ;
@@ -241,33 +265,6 @@ BEGIN
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.campaign_upsert_client(client_id bigint, campaign_name character varying DEFAULT NULL::character varying, description character varying DEFAULT NULL::character varying, id bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-
-	_campaign_id bigint = COALESCE($4,(SELECT nextval('beyond_boarders.campaign_id_seq'::regclass))) ;
-	
-BEGIN	
-	
-	INSERT INTO beyond_boarders.campaign(id, name, description)
-	VALUES (_campaign_id, $2, $3)
-	ON CONFLICT ON CONSTRAINT campaign_pkey
-			DO UPDATE 
-			SET name = $2, 
-				description = $3;
-				
-	INSERT INTO beyond_boarders.campaign_member(campaign_id, client_id)
-	VALUES (_campaign_id, $1)
-	ON CONFLICT ON CONSTRAINT pk_campaign DO NOTHING;	
-	
-	RETURN _campaign_id;
-	
-END;
-$function$
-;
 CREATE OR REPLACE FUNCTION beyond_boarders.team_delete_client(id bigint DEFAULT NULL::bigint)
  RETURNS integer
  LANGUAGE plpgsql
@@ -281,64 +278,6 @@ BEGIN
 	WHERE 
 		t.id = $1;
 	RETURN $1;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.campaign_delete_client(campaign_id bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-
-	_campaign_id bigint;
-	
-BEGIN	
-
-	UPDATE 
-		beyond_boarders.campaign
-	SET 
-		isdeleted = true
-	WHERE id = $1;
-	
-	RETURN $1;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.bucket_upsert_campaign(campaign_id bigint, bucket_name character varying, id bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-
-	_bucket_id int;
-	--bucket_id bigint = COALESCE($3,(SELECT nextval('beyond_boarders.bucket_id_seq'::regclass))) ;
-
-BEGIN	
-	
-	IF (SELECT COUNT(1) FROM beyond_boarders.bucket b WHERE b.name = $2) = 0 THEN 
-		_bucket_id = (SELECT nextval('beyond_boarders.bucket_id_seq'::regclass));
-	ELSE
-		_bucket_id = (SELECT b.id FROM beyond_boarders.bucket b WHERE b.name = $2);
-	END IF;
-			
-	INSERT INTO beyond_boarders.bucket(id, name)
-	VALUES (_bucket_id, $2)
-	ON CONFLICT ON CONSTRAINT bucket_pkey
-			DO UPDATE 
-			SET name = $2;
-	
-	INSERT INTO beyond_boarders.campaign_bucket(campaign_id, bucket_id)
-	VALUES ($1, _bucket_id)
-	ON CONFLICT ON CONSTRAINT pk_campaign_bucket
-			DO UPDATE 
-			SET campaign_id = $1,
-				bucket_id = _bucket_id;		
-	
-	RETURN _bucket_id;
 	
 END;
 $function$
@@ -374,6 +313,30 @@ BEGIN
 		cm.campaign_id = $2;
 
 	RETURN $1;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.picklist_upsert_list(description character varying, type character varying, sort bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+	
+	_picklist_id bigint = COALESCE($4,(SELECT (nextval('beyond_boarders.picklist_id_seq'::regclass)))) ;
+	
+BEGIN	
+	
+	INSERT INTO beyond_boarders.picklist(id, description, type, sort)
+	VALUES (_picklist_id, $1, $2, $3 )
+	ON CONFLICT ON CONSTRAINT pk_id_type
+			DO UPDATE 
+			SET description = $1,
+				type = $2, 
+				sort = $3;
+	
+	RETURN _picklist_id;
 	
 END;
 $function$
@@ -419,23 +382,6 @@ BEGIN
 	RETURNING id INTO _pool_id;
 
 	RETURN _pool_id;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.user_delete_users(id bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-			
-BEGIN	
-
-	UPDATE beyond_boarders.user u
-	SET  
-		isdeleted = true
-	WHERE 
-		u.id = $1;
-	RETURN $1;
 	
 END;
 $function$
@@ -487,38 +433,6 @@ BEGIN
 				column_number = $4		
 	RETURNING id INTO _id;
 	RETURN _id;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.mapping_update_column_number(company character varying, endorsement_name character varying, column_number bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-	
-	_id bigint;
-	_company_id bigint = (SELECT c.id FROM beyond_boarders.campaign c WHERE c.name = $1);
-	
-BEGIN	
-
-	--IF (SELECT COUNT(1) FROM beyond_boarders.endorsement_mapping WHERE company_id = _company_id) = 0 THEN
-	
-		INSERT INTO beyond_boarders.endorsement_mapping(company_id, endorsement_header, column_number, field_mapping_id)
-	 	VALUES (_company_id, $2, $3, $3)
-		ON CONFLICT ON CONSTRAINT unq_company_field_mapping_header
-		DO UPDATE 
-		 	SET 
-			 	endorsement_header= $2,
-		 		column_number = $3
-			
-			RETURNING id INTO _id;
-		RETURN _id;
-	--ELSE
-		
-	--	RETURN 0;
-	--END IF;
 	
 END;
 $function$
@@ -748,8 +662,172 @@ BEGIN
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.bucket_select_accounts(campaign_id bigint, bucket_id bigint DEFAULT NULL::bigint, account_id bigint DEFAULT NULL::bigint)
- RETURNS TABLE(id bigint, bucketid bigint, bucket_name character varying, account beyond_boarders.account, contact beyond_boarders.contact, product beyond_boarders.product, cdf beyond_boarders.cdf_info, agent_notes beyond_boarders.agentnotes)
+CREATE OR REPLACE FUNCTION beyond_boarders.team_put_users(id bigint, users bigint[])
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+
+	user_id int;
+
+BEGIN	
+
+	DELETE FROM beyond_boarders.user_member WHERE team_id = $1;
+
+	FOREACH user_id IN ARRAY $2 LOOP
+    	INSERT INTO beyond_boarders.user_member VALUES($1, user_id);
+  	END LOOP;
+
+	RETURN id;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.team_put_campaigns(id bigint, campaigns bigint[])
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+
+	campaign_id int;
+
+BEGIN	
+
+	DELETE FROM beyond_boarders.team_member WHERE team_id = $1;
+
+	FOREACH campaign_id IN ARRAY $2 LOOP
+    	INSERT INTO beyond_boarders.team_member VALUES(campaign_id, $1);
+  	END LOOP;
+
+	RETURN id;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.campaign_select_client(client_id bigint DEFAULT NULL::bigint, campaign character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(id bigint, name character varying, client character varying)
+ LANGUAGE plpgsql
+AS $function$
+	
+BEGIN	
+
+	RETURN QUERY
+	SELECT 
+		ca.id, ca.name, c.name
+	FROM 
+		beyond_boarders.client c
+	LEFT JOIN
+		beyond_boarders.campaign_member cm ON cm.client_id = c.id
+	LEFT JOIN
+		beyond_boarders.campaign ca ON cm.campaign_id = ca.id
+	WHERE 
+		($1 ISNULL OR c.id = $1)
+	AND
+		($2 ISNULL OR ca.name ilike '%' || $2 || '%')
+	ORDER BY c.name;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.client_select_clients(client_name character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(id bigint, client character varying, campaigns beyond_boarders.get_campaigns[])
+ LANGUAGE plpgsql
+AS $function$
+	
+BEGIN
+	
+	RETURN QUERY 
+
+	SELECT 
+		c.id, c.name, coalesce(array_agg((ca.id, ca.name)::beyond_boarders.get_campaigns)filter (where ca.id is not null), '{}')
+	FROM  
+		beyond_boarders.client c
+	LEFT JOIN
+		beyond_boarders.campaign_member cm ON c.id = cm.client_id
+	LEFT JOIN
+		beyond_boarders.campaign ca ON ca.id = cm.campaign_id
+	WHERE 
+		($1 ISNULL OR c.name ilike '%' || $1 || '%')
+	AND
+		c.isdeleted = false
+	GROUP BY
+		c.id, c.name;
+	
+END;	
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.bucket_upsert_campaign(campaign_id bigint, bucket_name character varying, user_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+	
+	_bucket_id int = COALESCE((SELECT b.id FROM beyond_boarders.bucket b WHERE b.name = $2),(SELECT nextval('beyond_boarders.bucket_id_seq'::regclass)));
+
+BEGIN	
+		
+	INSERT INTO beyond_boarders.bucket(id, name, last_touched_by)
+	VALUES (_bucket_id, $2, $3)
+	ON CONFLICT ON CONSTRAINT bucket_pkey
+			DO UPDATE 
+			SET name = $2,
+				last_touched_by = $3;
+	
+	INSERT INTO beyond_boarders.campaign_bucket(campaign_id, bucket_id)
+	VALUES ($1, _bucket_id)
+	ON CONFLICT ON CONSTRAINT pk_campaign_bucket
+			DO UPDATE 
+			SET campaign_id = $1,
+				bucket_id = _bucket_id;		
+	
+	RETURN _bucket_id;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.user_upsert_team(first_name character varying, middle_name character varying, last_name character varying, email_address character varying, username character varying, users_team beyond_boarders.users_team[] DEFAULT NULL::beyond_boarders.users_team[], id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+	
+	_user_id bigint = COALESCE($7,(SELECT nextval('beyond_boarders.user_id_seq'::regclass))) ;
+	_ut beyond_boarders.users_team;
+	
+BEGIN	
+	
+	INSERT INTO beyond_boarders.user(first_name, middle_name, last_name, email_address, username, id)
+	VALUES ($1, $2, $3, $4, $5, _user_id)
+	ON CONFLICT ON CONSTRAINT user_pkey
+			DO UPDATE 
+			SET first_name = $1, 
+				middle_name = $2, 
+				last_name = $3, 
+				email_address = $4,
+				username = $5;	
+				
+	IF $6 IS NOT NULL THEN
+	
+		DELETE FROM beyond_boarders.user_member WHERE team_id = _team_id;
+		
+		FOREACH _ut IN ARRAY $6
+		LOOP
+					
+			INSERT INTO beyond_boarders.user_member(team_id, user_id)
+			VALUES (_ut.id, _user_id)
+			ON CONFLICT ON CONSTRAINT unq_team_user_ids DO NOTHING;
+					
+		END LOOP;
+		END IF;			
+	RETURN _user_id;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.logs_select_history(object_name character varying DEFAULT NULL::character varying, created_date timestamp without time zone DEFAULT NULL::timestamp without time zone)
+ RETURNS TABLE(id bigint, object character varying, object_id bigint, action character varying, message character varying, last_touched_by character varying, date_created timestamp without time zone)
  LANGUAGE plpgsql
 AS $function$
 	
@@ -757,254 +835,478 @@ BEGIN
 
 	RETURN QUERY 
 	
-	WITH agent_notes as (
-		SELECT
-			an.account_id,
-			(
-				an.id,
-				an.account_id,
-				toe.description, 
-				ac.description, 
-				poc.description, 
-				pocn.description ,
-				 rfd.description, 
-				 s.description, 
-				 pt.description,
-				 an.promise_amount,
-				 an.promise_date,
-				 an.note_comment,
-				an.hot_notes ,
-				an.created_date,
-			  (u.first_name || ' ' || u.last_name)::character varying
-			)::beyond_boarders.agentnotes notes
-			--,
-			--RANK() OVER (PARTITION BY an.account_id ORDER BY an.created_date DESC) AS rank
-		FROM
-			beyond_boarders.agent_notes an 
-		LEFT JOIN
-			beyond_boarders.picklist_type_of_entry toe ON toe.id = an.type_of_entry_id
-		LEFT JOIN
-			beyond_boarders.picklist_action_code ac ON ac.id = an.action_code_id
-		LEFT JOIN
-			beyond_boarders.picklist_place_of_contact poc ON poc.id = an.place_of_contact_id	
-		LEFT JOIN
-			beyond_boarders.picklist_point_of_contact pocn ON pocn.id = an.point_of_contact_id	
-		LEFT JOIN
-			beyond_boarders.picklist_reasons_for_delinquency rfd ON rfd.id = an.reasons_for_deliquency_id
-		LEFT JOIN
-			beyond_boarders.picklist_status s ON s.id = an.status_id	
-		LEFT JOIN
-			beyond_boarders.picklist_payment_type pt ON pt.id = an.payment_type_id
-		LEFT JOIN
-			beyond_boarders.user u ON u.id =  an.user_id
-		ORDER BY an.created_date desc
-		LIMIT 1		
-	)
 	SELECT 
-		ai.id, cb.bucket_id, b.name,
-		(
-			ai.id,
-			ai.account_number,
-			ai.original_amount_balance,
-			ai.outstanding_balance,
-			ai.partial_payment,
-			ai.last_payment_amount,
-			ai.last_payment_date,
-			ai.endorsement_date,
-			ai.expiry_date,
-			ai.spn_account_number
-		)::beyond_boarders.account,
-		(
-			ci.name,
-			ci.birthday,
-			ci.email_address,
-			ci.landline_1,
-			ci.landline_2,
-			ci.landline_3,
-			ci.mobilenumber_1,
-			ci.mobilenumber_2,
-			ci.mobilenumber_3,
-			ci.home_address,
-			ci.barangay,
-			ci.city,
-			ci.zip_code,
-			ci.province,
-			ci.company,
-			ci.company_address,
-			ci.company_contact
-		)::beyond_boarders.contact,
-		(
-			pi.product_type,
-			pi.age_bucket,
-			pi.brand,
-			pi.model,
-			pi.type,
-			pi.color,
-			pi.plate_number,
-			pi.engine_number,
-			pi.chasis_number,
-			pi.description,
-			pi.originating_branch
-		)::beyond_boarders.product,	
-		(
-			c.data01,
-			c.data02,
-			c.data03,
-			c.data04,
-			c.data05,
-			c.data06,
-			c.data07,
-			c.data08,
-			c.data09,
-			c.data10,
-			c.data11,
-			c.data12,
-			c.data13,
-			c.data14,
-			c.data15,
-			c.data16,
-			c.data17,
-			c.data18,
-			c.data19,
-			c.data20,
-			c.data21,
-			c.data22,
-			c.data23,
-			c.data24,
-			c.data25,
-			c.data26,
-			c.data27,
-			c.data28,
-			c.data29,
-			c.data30,
-			c.data31,
-			c.data32,
-			c.data33,
-			c.data34,
-			c.data35,
-			c.data36,
-			c.data37,
-			c.data38,
-			c.data39,
-			c.data40,
-			c.data41,
-			c.data42,
-			c.data43,
-			c.data44,
-			c.data45,
-			c.data46,
-			c.data47,
-			c.data48,
-			c.data49,
-			c.data50
-		)::beyond_boarders.cdf_info,
-			an.notes
-	FROM
-		beyond_boarders.bucket b
-	INNER JOIN
-		beyond_boarders.campaign_bucket cb on cb.bucket_id = b.id
-	INNER JOIN
-		beyond_boarders.account_information ai ON ai.bucket_id = b.id
+		l.id, l.object, l.object_id, l.action, l.message, (u.first_name || ' ' || u.last_name)::character varying, l.date_created
+	FROM 
+		beyond_boarders.logs l
 	LEFT JOIN
-		beyond_boarders.contact_information ci ON ai.id = ci.account_id
-	LEFT JOIN
-		beyond_boarders.product_information pi ON ai.id = pi.account_id
-	LEFT JOIN
-		beyond_boarders.cdf c ON ai.id = c.account_id
-	LEFT JOIN
-		agent_notes an ON an.account_id = ai.id
-	WHERE 
-		cb.campaign_id = $1
+		beyond_boarders.user u ON u.id = l.user_id
+	WHERE
+	 	($1 ISNULL OR l.object = $1)
 	AND
-		($2 ISNULL OR cb.bucket_id = $2)
-	AND
-		($3 ISNULL OR ai.id = $3)
-	ORDER BY ci.name;
-	
+		($2 ISNULL OR l.date_created = $2)
+	ORDER BY l.date_created;
  END;	
- $function$
+ 
+$function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.agentnotes_upsert_tagging(account_id bigint, type_of_entry_id bigint DEFAULT NULL::bigint, action_code_id bigint DEFAULT NULL::bigint, place_of_contact_id bigint DEFAULT NULL::bigint, point_of_contact_id bigint DEFAULT NULL::bigint, reasons_for_deliquency_id bigint DEFAULT NULL::bigint, status_id bigint DEFAULT NULL::bigint, payment_type_id bigint DEFAULT NULL::bigint, promise_amount double precision DEFAULT 0, promise_date timestamp without time zone DEFAULT NULL::timestamp without time zone, note_comment text DEFAULT NULL::text, hot_notes text DEFAULT NULL::text, id bigint DEFAULT NULL::bigint)
+CREATE OR REPLACE FUNCTION beyond_boarders.team_upsert_user(team_users beyond_boarders.users_model[] DEFAULT NULL::beyond_boarders.users_model[], name character varying DEFAULT NULL::character varying, id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+	
+	_team_id bigint = COALESCE($3,(SELECT nextval('beyond_boarders.team_id_seq'::regclass))) ;
+	_user_id bigint;
+	_tu beyond_boarders.users_model;
+	cnt bigint;
+BEGIN	
+
+	INSERT INTO beyond_boarders.team(id, name)
+	VALUES (_team_id, $2)
+	ON CONFLICT ON CONSTRAINT team_pkey
+			DO UPDATE 
+			SET name = $2;	
+
+	IF $1 IS NOT NULL THEN
+	
+		--DELETE FROM beyond_boarders.user_member WHERE team_id = _team_id;
+		
+		FOREACH _tu IN ARRAY $1
+		LOOP
+				
+				_user_id =  COALESCE(_tu.id,(SELECT nextval('beyond_boarders.user_id_seq'::regclass))) ;
+						
+				INSERT INTO beyond_boarders.user(first_name, middle_name, last_name, email_address, username, password, salt,  id)
+				VALUES (_tu.first_name, _tu.middle_name, _tu.last_name, _tu.email_address, _tu.username, _tu.password, _tu.salt, _user_id)
+				ON CONFLICT ON CONSTRAINT user_pkey
+						DO UPDATE 
+						SET first_name = _tu.first_name, 
+							middle_name = _tu.middle_name, 
+							last_name = _tu.last_name, 
+							email_address = _tu.email_address;
+							
+				INSERT INTO beyond_boarders.user_member(team_id, user_id)
+				VALUES (_team_id, _user_id)
+				ON CONFLICT ON CONSTRAINT unq_team_user_ids DO NOTHING;
+					
+		END LOOP;
+		
+	END IF;		
+
+	RETURN _team_id;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.logs_bucket()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+
+BEGIN
+
+IF TG_OP = 'INSERT' THEN
+	
+		INSERT INTO beyond_boarders.logs( "user_id", object, object_id, action, message)
+		VALUES(
+			NEW.last_touched_by, 'Bucket', NEW.id, 'Create', 
+			'Created Bucket ' || NEW.name
+		);
+	
+ELSIF TG_OP = 'UPDATE' THEN
+	
+		IF NEW.name <> OLD.name THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Bucket', NEW.id, 'Update', 
+				'Updated Bucket name from ' || 
+				Old.name || 
+				' to ' || 
+				NEW.name 
+			);
+		END IF;
+
+		IF NEW.isdeleted <> OLD.isdeleted THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Bucket', NEW.id, 'Delete', 
+				'Deleted Bucket ' || NEW.name 
+			);
+		END IF;
+END IF;
+RETURN NEW;
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.user_delete_users(user_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+			
+BEGIN	
+
+	UPDATE beyond_boarders.user u
+	SET  
+		isdeleted = true,
+		last_touched_by = $1
+	WHERE 
+		u.id = $2;
+		
+	RETURN $2;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.logs_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+
+BEGIN
+
+IF TG_OP = 'INSERT' THEN
+	
+		INSERT INTO beyond_boarders.logs( "user_id", object, object_id, action, message)
+		VALUES(
+			NEW.last_touched_by, 'User', NEW.id, 'Create', 
+			'Created User ' || NEW.last_name || ', ' || NEW.first_name
+		);
+	
+ELSIF TG_OP = 'UPDATE' THEN
+		
+		IF NEW.first_name <> OLD.first_name THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'User', NEW.id, 'Update', 
+				'Updated first name from ' || 
+				Old.first_name || 
+				' to ' || 
+				NEW.first_name 
+			);
+		END IF;
+
+		IF NEW.middle_name <> OLD.middle_name THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'User', NEW.id, 'Update', 
+				'Updated middle name from ' || 
+				Old.middle_name || 
+				' to ' || 
+				NEW.middle_name 
+			);
+		END IF;
+		
+		IF NEW.last_name <> OLD.last_name THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'User', NEW.id, 'Update', 
+				'Updated last name from ' || 
+				Old.last_name || 
+				' to ' || 
+				NEW.last_name 
+			);
+		END IF;
+
+		IF NEW.username <> OLD.username THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'User', NEW.id, 'Update', 
+				'Updated username from ' || 
+				Old.username || 
+				' to ' || 
+				NEW.username 
+			);
+		END IF;
+
+		IF NEW.email_address <> OLD.email_address THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'User', NEW.id, 'Update', 
+				'Updated email_address from ' || 
+				Old.email_address || 
+				' to ' || 
+				NEW.email_address 
+			);
+		END IF;
+		
+		IF NEW.isdeleted <> OLD.isdeleted THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'User', NEW.id, 'Delete', 
+				'Deleted User ' || NEW.last_name || ', ' || NEW.first_name
+			);
+		END IF;
+END IF;
+RETURN NEW;
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.client_upsert_clientcampaigns(client_id bigint, campaign_name character varying, id bigint DEFAULT NULL::bigint)
  RETURNS integer
  LANGUAGE plpgsql
 AS $function$
 
 DECLARE
 
-	_agent_notes_id bigint = COALESCE($13,(SELECT nextval('beyond_boarders.agent_notes_id_seq'::regclass))) ;
-	
+	_campaign_id bigint = COALESCE($3,(SELECT nextval('beyond_boarders.campaign_id_seq'::regclass))) ;
+
 BEGIN	
 
-	INSERT INTO beyond_boarders.agent_notes(
-	id, account_id, type_of_entry_id, action_code_id, place_of_contact_id, point_of_contact_id, reasons_for_deliquency_id, status_id, payment_type_id, promise_amount, promise_date, note_comment, hot_notes)
-	VALUES (_agent_notes_id, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	ON CONFLICT ON CONSTRAINT agent_notes_pkey
+		
+	INSERT INTO beyond_boarders.campaign(id, client_id, name)
+	VALUES (_campaign_id, $1, $2)
+	ON CONFLICT ON CONSTRAINT campaign_pkey
 			DO UPDATE 
-			SET 
-				id = _agent_notes_id, 
-				account_id = $1, 
-				type_of_entry_id = $2, 
-				action_code_id = $3, 
-				place_of_contact_id = $4, 
-				point_of_contact_id = $5, 
-				reasons_for_deliquency_id = $6, 
-				status_id = $7, 
-				payment_type_id = $8, 
-				promise_amount = $9, 
-				promise_date = $10, 
-				note_comment = $11, 
-				hot_notes = $12;
+			SET name = $2;		
+
+	INSERT INTO beyond_boarders.campaign_member(client_id, campaign_id)
+	VALUES ($1, _campaign_id)
+	ON CONFLICT ON CONSTRAINT pk_campaign
+	DO UPDATE SET
+		client_id = $1, 
+		campaign_id = _campaign_id;
 	
-	RETURN _agent_notes_id;
+	RETURN _campaign_id;
 	
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.user_select_appusers(username character varying)
- RETURNS TABLE(id bigint, first_name character varying, middle_name character varying, last_name character varying, role character varying, usernme character varying, passwordhash character varying, passwordsalt character varying, teams beyond_boarders.teams[])
+CREATE OR REPLACE FUNCTION beyond_boarders.mapping_update_column_number(campaign character varying, endorsement_name character varying, column_number bigint DEFAULT NULL::bigint)
+ RETURNS integer
  LANGUAGE plpgsql
 AS $function$
 
+DECLARE
+	
+	_id bigint;
+	_campaign_id bigint = (SELECT c.id FROM beyond_boarders.campaign c WHERE c.name = $1);
+	
+BEGIN	
+
+	IF (SELECT COUNT(1) FROM beyond_boarders.campaign c WHERE c.name = $1) != 0 THEN
+
+		INSERT INTO beyond_boarders.endorsement_mapping(campaign_id, endorsement_header, column_number, field_mapping_id)
+	 	VALUES (_campaign_id, $2, $3, $3)
+		ON CONFLICT ON CONSTRAINT unq_company_field_mapping_header
+		DO UPDATE 
+		 	SET 
+			 	endorsement_header= $2,
+		 		column_number = $3
+			
+			RETURNING id INTO _id;
+		RETURN _id;
+	ELSE
+		RAISE EXCEPTION 'Campaign % is not found', $1;
+	END IF;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.team_select_client(campaign_id bigint DEFAULT NULL::bigint, team_name character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(id bigint, team character varying, campaigns beyond_boarders.campaigns[], users beyond_boarders.get_users[])
+ LANGUAGE plpgsql
+AS $function$
+	
 BEGIN
 
 	RETURN QUERY 
-	SELECT
-		u.id, u.first_name, u.middle_name, u.last_name, r.name, u.username, u.password, u.salt, 
-		array_agg((t.id, t.name, t.campaign_member)::beyond_boarders.teams)
-		--ARRAY_AGG(t.campaign_member)
-	FROM
+	WITH team as (
+			SELECT 
+				t.id, t.name,  
+				coalesce(array_agg((ca.id,ca.name,c.name)::beyond_boarders.campaigns ) filter (where ca.id is not null),  '{}') team--,
+			FROM  
+				beyond_boarders.team t
+			LEFT JOIN
+				beyond_boarders.team_member tm ON tm.team_id = t.id
+			LEFT JOIN
+				beyond_boarders.campaign ca ON ca.id = tm.campaign_id
+			LEFT JOIN
+				beyond_boarders.campaign_member cm ON cm.campaign_id = ca.id
+			LEFT JOIN
+				beyond_boarders.client c ON c.id = cm.client_id
+			WHERE 
+				($1 ISNULL OR ca.id = $1)
+			AND
+				($2 ISNULL OR t.name ilike '%' || $2 || '%')
+			AND
+			 	t.isdeleted = false
+			GROUP BY t.id, t.name
+			ORDER BY t.name
+	)
+	SELECT 
+		t.id, t.name, t.team,
+		COALESCE(
+			ARRAY_AGG((u.id, u.first_name, u.middle_name, u.last_name, u.email_address, u.username)::beyond_boarders.get_users)
+		filter (where u.id is not null),  '{}')
+	FROM team t
+	LEFT JOIN
+		beyond_boarders.user_member um ON um.team_id = t.id
+	LEFT JOIN
+		beyond_boarders.user u ON u.id = um.user_id
+	GROUP BY t.id, t.name, t.team;
+	
+END;	
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.user_select_users(team_id bigint DEFAULT NULL::bigint, filter character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(id bigint, first_name character varying, middle_name character varying, last_name character varying, email_address character varying, username character varying, role character varying, team beyond_boarders.users_team[])
+ LANGUAGE plpgsql
+AS $function$
+	
+BEGIN
+
+	RETURN QUERY 
+	SELECT 
+		u.id, u.first_name, u.middle_name, u.last_name, u.email_address, u.username, r.name,
+		COALESCE(ARRAY_AGG((t.id,t.name)::beyond_boarders.users_team) filter (where u.id is not null),  '{}')
+	FROM  
 		beyond_boarders.user u
 	LEFT JOIN 
 		beyond_boarders.user_role ur on ur.user_id = u.id
 	LEFT JOIN
-		beyond_boarders.role r on r.id = ur.role_id
+		beyond_boarders.role r on r.id = ur.role_id	
 	LEFT JOIN
-		beyond_boarders.user_member um on um.user_id = u.id
-	LEFT JOIN (
-				SELECT 
-					t.id, t.name, array_agg((ca.id, ca.name, c.name)::beyond_boarders.campaigns) campaign_member
-				FROM
-					beyond_boarders.client c
-				INNER JOIN	
-					beyond_boarders.campaign_member cm ON c.id = cm.client_id	
-				INNER JOIN
-					beyond_boarders.campaign ca ON ca.id = cm.campaign_id
-				INNER JOIN
-					beyond_boarders.team_member tm ON ca.id = tm.campaign_id
-				INNER JOIN	
-					beyond_boarders.team t ON t.id = tm.team_id
-				WHERE
-					ca.name is not null
-				GROUP BY
-					t.id, t.name
-					) t on t.id = um.team_id
-	WHERE
-		u.username = $1
-	GROUP BY u.id, u.first_name, u.middle_name, u.last_name, r.name;
+		beyond_boarders.user_member um ON u.id = um.user_id
+	LEFT JOIN
+		beyond_boarders.team t ON t.id = um.team_id
+	WHERE 
+		($1 ISNULL OR t.id = $1)
+	AND
+		($2 ISNULL OR u.first_name || u.middle_name || u.last_name || u.username ||  u.email_address ilike '%' || $2 ||'%')
+ 	AND 
+	 	u.isdeleted = false
+	GROUP BY u.id, u.first_name, u.middle_name, u.last_name, u.email_address, u.username, r.name
+	ORDER BY u.first_name;
+	
 END;	
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.endorsement_upsert_accounts(account_number character varying, spn_account_number character varying, original_amount_balance double precision DEFAULT (0)::double precision, outstanding_balance double precision DEFAULT (0)::double precision, partial_payment double precision DEFAULT (0)::double precision, last_payment_amount double precision DEFAULT (0)::double precision, last_payment_date character varying DEFAULT NULL::character varying, endorsement_date character varying DEFAULT NULL::character varying, expiry_date character varying DEFAULT NULL::character varying, bucket_name character varying DEFAULT NULL::character varying, name character varying DEFAULT NULL::character varying, birthday character varying DEFAULT NULL::character varying, email_address character varying DEFAULT NULL::character varying, landline_1 character varying DEFAULT NULL::character varying, landline_2 character varying DEFAULT NULL::character varying, landline_3 character varying DEFAULT NULL::character varying, mobilenumber_1 character varying DEFAULT NULL::character varying, mobilenumber_2 character varying DEFAULT NULL::character varying, mobilenumber_3 character varying DEFAULT NULL::character varying, home_address character varying DEFAULT NULL::character varying, barangay character varying DEFAULT NULL::character varying, city character varying DEFAULT NULL::character varying, zip_code character varying DEFAULT NULL::character varying, province character varying DEFAULT NULL::character varying, company character varying DEFAULT NULL::character varying, company_address character varying DEFAULT NULL::character varying, company_contact character varying DEFAULT NULL::character varying, product_type character varying DEFAULT NULL::character varying, age_bucket character varying DEFAULT NULL::character varying, brand character varying DEFAULT NULL::character varying, model character varying DEFAULT NULL::character varying, type character varying DEFAULT NULL::character varying, color character varying DEFAULT NULL::character varying, plate_number character varying DEFAULT NULL::character varying, engine_number character varying DEFAULT NULL::character varying, chasis_number character varying DEFAULT NULL::character varying, description character varying DEFAULT NULL::character varying, originating_branch character varying DEFAULT NULL::character varying, tcdf beyond_boarders.cdf_type[] DEFAULT NULL::beyond_boarders.cdf_type[], campaign character varying DEFAULT NULL::character varying)
+CREATE OR REPLACE FUNCTION beyond_boarders.campaign_upsert_client(client_id bigint, campaign_name character varying DEFAULT NULL::character varying, description character varying DEFAULT NULL::character varying, user_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+
+	_campaign_id bigint = COALESCE($5,(SELECT nextval('beyond_boarders.campaign_id_seq'::regclass))) ;
+	
+BEGIN	
+	
+	INSERT INTO beyond_boarders.campaign(id, name, description, last_touched_by)
+	VALUES (_campaign_id, $2, $3, $4)
+	ON CONFLICT ON CONSTRAINT campaign_pkey
+			DO UPDATE 
+			SET name = $2, 
+				description = $3,
+				last_touched_by = $4;
+				
+	INSERT INTO beyond_boarders.campaign_member(campaign_id, client_id)
+	VALUES (_campaign_id, $1)
+	ON CONFLICT ON CONSTRAINT pk_campaign DO NOTHING;	
+	
+	RETURN _campaign_id;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.mapping_select_fields(campaign character varying, bb_table character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(table_name character varying, field_name character varying, column_number bigint, sort bigint, endorsement_header character varying)
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+
+	_campaign_id bigint = (SELECT c.id FROM beyond_boarders.campaign c WHERE c.name = $1);
+	
+BEGIN
+
+	RETURN QUERY 
+	SELECT 
+		fm.table_name, fm.field_name,em.column_number, fm.sort, em.endorsement_header
+	FROM  
+		beyond_boarders.field_mapping fm
+	LEFT JOIN 
+		beyond_boarders.endorsement_mapping em	ON fm.id = em.field_mapping_id
+	WHERE
+	 	 em.campaign_id = _campaign_id
+	ORDER BY fm.sort;
+END;	
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.logs_campaign()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+
+	user character varying;
+
+BEGIN
+IF TG_OP = 'INSERT' THEN
+	
+		INSERT INTO beyond_boarders.logs( "user_id", object, object_id, action, message)
+		VALUES(
+			NEW.last_touched_by, 'Campaign', NEW.id, 'Create', 
+			'Created Campaign' || NEW.name
+		);
+	
+ELSIF TG_OP = 'UPDATE' THEN
+	
+		IF NEW.name <> OLD.name THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Campaign', NEW.id, 'Update', 
+				'Updated Campaign name from ' || 
+				Old.name || 
+				' to ' || 
+				NEW.name 
+			);
+		END IF;
+		--RAISE EXCEPTION 'OLD %, NEW %, %',OLD.description,NEW.description,NEW.description <> OLD.description ;
+		IF NEW.description <> OLD.description THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Campaign', NEW.id, 'Update', 
+				'Updated Campaign description from ' || 
+				Old.description || 
+				' to ' || 
+				NEW.description 
+			);
+		END IF;
+
+		IF NEW.status_id <> OLD.status_id THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Campaign', NEW.id, 'Update', 
+				'Updated Campaign from Status ' || 
+				(SELECT p.name FROM beyond_boarders.picklist p WHERE p.id = Old.status_id) 
+				|| ' to ' || 
+				(SELECT p.name FROM beyond_boarders.picklist p WHERE p.id = NEW.status_id )
+			);
+		END IF;
+
+		IF NEW.isdeleted <> OLD.isdeleted THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Campaign', NEW.id, 'Delete', 
+				'Deleted Campaign ' || NEW.name 
+			);
+		END IF;
+END IF;
+RETURN NEW;
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.endorsement_upsert_accounts(account_number character varying, spn_account_number character varying, original_amount_balance double precision DEFAULT (0)::double precision, outstanding_balance double precision DEFAULT (0)::double precision, partial_payment double precision DEFAULT (0)::double precision, last_payment_amount double precision DEFAULT (0)::double precision, last_payment_date character varying DEFAULT NULL::character varying, endorsement_date character varying DEFAULT NULL::character varying, expiry_date character varying DEFAULT NULL::character varying, bucket_name character varying DEFAULT NULL::character varying, name character varying DEFAULT NULL::character varying, birthday character varying DEFAULT NULL::character varying, email_address character varying DEFAULT NULL::character varying, landline_1 character varying DEFAULT NULL::character varying, landline_2 character varying DEFAULT NULL::character varying, landline_3 character varying DEFAULT NULL::character varying, mobilenumber_1 character varying DEFAULT NULL::character varying, mobilenumber_2 character varying DEFAULT NULL::character varying, mobilenumber_3 character varying DEFAULT NULL::character varying, home_address character varying DEFAULT NULL::character varying, barangay character varying DEFAULT NULL::character varying, city character varying DEFAULT NULL::character varying, zip_code character varying DEFAULT NULL::character varying, province character varying DEFAULT NULL::character varying, company character varying DEFAULT NULL::character varying, company_address character varying DEFAULT NULL::character varying, company_contact character varying DEFAULT NULL::character varying, product_type character varying DEFAULT NULL::character varying, age_bucket character varying DEFAULT NULL::character varying, brand character varying DEFAULT NULL::character varying, model character varying DEFAULT NULL::character varying, type character varying DEFAULT NULL::character varying, color character varying DEFAULT NULL::character varying, plate_number character varying DEFAULT NULL::character varying, engine_number character varying DEFAULT NULL::character varying, chasis_number character varying DEFAULT NULL::character varying, description character varying DEFAULT NULL::character varying, originating_branch character varying DEFAULT NULL::character varying, tcdf beyond_boarders.cdf_type[] DEFAULT NULL::beyond_boarders.cdf_type[], campaign character varying DEFAULT NULL::character varying, user_id bigint DEFAULT NULL::bigint)
  RETURNS integer
  LANGUAGE plpgsql
 AS $function$
@@ -1013,11 +1315,11 @@ DECLARE
 
 	_account_id bigint;
 	_campaign_id bigint = (SELECT c.id FROM beyond_boarders.campaign c WHERE c.name = $40);
-	_bucket_id bigint = beyond_boarders.bucket_upsert_campaign(_campaign_id, $10);	
+	_bucket_id bigint = beyond_boarders.bucket_upsert_campaign(_campaign_id, $10, $41);	
 	_cdf beyond_boarders.cdf_type; 
 		
 BEGIN	
-	
+	--raise exception '%',$41;
 	INSERT INTO beyond_boarders.account_information(
 		account_number, 
 		spn_account_number,
@@ -1231,287 +1533,76 @@ BEGIN
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.team_put_users(id bigint, users bigint[])
- RETURNS integer
+CREATE OR REPLACE FUNCTION beyond_boarders.logs_client()
+ RETURNS trigger
  LANGUAGE plpgsql
 AS $function$
-DECLARE
-
-	user_id int;
-
-BEGIN	
-
-	DELETE FROM beyond_boarders.user_member WHERE team_id = $1;
-
-	FOREACH user_id IN ARRAY $2 LOOP
-    	INSERT INTO beyond_boarders.user_member VALUES($1, user_id);
-  	END LOOP;
-
-	RETURN id;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.team_put_campaigns(id bigint, campaigns bigint[])
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-
-	campaign_id int;
-
-BEGIN	
-
-	DELETE FROM beyond_boarders.team_member WHERE team_id = $1;
-
-	FOREACH campaign_id IN ARRAY $2 LOOP
-    	INSERT INTO beyond_boarders.team_member VALUES(campaign_id, $1);
-  	END LOOP;
-
-	RETURN id;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.campaign_select_client(client_id bigint DEFAULT NULL::bigint, campaign character varying DEFAULT NULL::character varying)
- RETURNS TABLE(id bigint, name character varying, client character varying)
- LANGUAGE plpgsql
-AS $function$
-	
-BEGIN	
-
-	RETURN QUERY
-	SELECT 
-		ca.id, ca.name, c.name
-	FROM 
-		beyond_boarders.client c
-	LEFT JOIN
-		beyond_boarders.campaign_member cm ON cm.client_id = c.id
-	LEFT JOIN
-		beyond_boarders.campaign ca ON cm.campaign_id = ca.id
-	WHERE 
-		($1 ISNULL OR c.id = $1)
-	AND
-		($2 ISNULL OR ca.name ilike '%' || $2 || '%')
-	ORDER BY c.name;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.change_password(user_id bigint, new_password character varying, old_password character varying, salt character varying)
- RETURNS void
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-
-	old_salt character varying = 'aRxyzL' || (SELECT u.salt FROM beyond_boarders.user u WHERE u.id = $1);
 
 BEGIN
+
+IF TG_OP = 'INSERT' THEN
 	
-	UPDATE 
-		beyond_boarders.user 
-	SET
-		password = $2,
-		salt = $4		
-	WHERE
-		id = $1 AND password = encode(sha256(exts.text2bytea($3 || old_salt)), 'base64');
+		INSERT INTO beyond_boarders.logs( "user_id", object, object_id, action, message)
+		VALUES(
+			NEW.last_touched_by, 'Client', NEW.id, 'Create', 
+			'Created Client ' || NEW.name
+		);
+	
+ELSIF TG_OP = 'UPDATE' THEN
+	
+		IF NEW.name <> OLD.name THEN
 			
-END;	
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.user_upsert_team(first_name character varying, middle_name character varying, last_name character varying, email_address character varying, username character varying, password character varying, salt character varying, users_team beyond_boarders.users_team[] DEFAULT NULL::beyond_boarders.users_team[], id bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-	
-	_user_id bigint = COALESCE($9,(SELECT nextval('beyond_boarders.user_id_seq'::regclass))) ;
-	_ut beyond_boarders.users_team;
-	
-BEGIN	
-	
-	INSERT INTO beyond_boarders.user(first_name, middle_name, last_name, email_address, username, password, salt,  id)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, _user_id)
-	ON CONFLICT ON CONSTRAINT user_pkey
-			DO UPDATE 
-			SET first_name = $1, 
-				middle_name = $2, 
-				last_name = $3, 
-				email_address = $4,
-				username = $5, 
-				--password = $6, 
-				salt = $7;	
-				
-	IF $8 IS NOT NULL THEN
-	
-		DELETE FROM beyond_boarders.user_member WHERE team_id = _team_id;
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Client', NEW.id, 'Update', 
+				'Updated Client name from ' || 
+				Old.name || 
+				' to ' || 
+				NEW.name 
+			);
+		END IF;
 		
-		FOREACH _ut IN ARRAY $8
-		LOOP
-					
-			INSERT INTO beyond_boarders.user_member(team_id, user_id)
-			VALUES (_ut.id, _user_id)
-			ON CONFLICT ON CONSTRAINT unq_team_user_ids DO NOTHING;
-					
-		END LOOP;
-		END IF;			
-	RETURN _user_id;
-	
+		IF NEW.description <> OLD.description THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Client', NEW.id, 'Update', 
+				'Updated Client description from ' || 
+				Old.description || 
+				' to ' || 
+				NEW.description 
+			);
+		END IF;
+
+		IF NEW.isdeleted <> OLD.isdeleted THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Client', NEW.id, 'Delete', 
+				'Deleted Client ' || NEW.name 
+			);
+		END IF;
+END IF;
+RETURN NEW;
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.user_upsert_users(first_name character varying, middle_name character varying, last_name character varying, email_address character varying, username character varying, password character varying, salt character varying, team_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-	
-	_user_id bigint =COALESCE($9,(SELECT nextval('beyond_boarders.user_id_seq'::regclass))) ;
-			
-BEGIN	
-	
-	INSERT INTO beyond_boarders.user(first_name, middle_name, last_name, email_address, username, password, salt,  id)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, _user_id)
-	ON CONFLICT ON CONSTRAINT user_pkey
-			DO UPDATE 
-			SET first_name = $1, 
-				middle_name = $2, 
-				last_name = $3, 
-				email_address = $4,
-				username = $5; 
-				
-	IF $8 IS NOT NULL THEN				
-		INSERT INTO beyond_boarders.user_member(team_id, user_id)
-		VALUES ($8, _user_id)
-		ON CONFLICT ON CONSTRAINT unq_team_user_ids
-				DO UPDATE 
-				SET team_id = $8, 
-					user_id = _user_id;
-	END IF;
-	
-	RETURN _user_id;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.client_select_clients(client_name character varying DEFAULT NULL::character varying)
- RETURNS TABLE(id bigint, client character varying, campaigns beyond_boarders.get_campaigns[])
- LANGUAGE plpgsql
-AS $function$
-	
-BEGIN
-	
-	RETURN QUERY 
-
-	SELECT 
-		c.id, c.name, coalesce(array_agg((ca.id, ca.name)::beyond_boarders.get_campaigns)filter (where ca.id is not null), '{}')
-	FROM  
-		beyond_boarders.client c
-	LEFT JOIN
-		beyond_boarders.campaign_member cm ON c.id = cm.client_id
-	LEFT JOIN
-		beyond_boarders.campaign ca ON ca.id = cm.campaign_id
-	WHERE 
-		($1 ISNULL OR c.name ilike '%' || $1 || '%')
-	AND
-		c.isdeleted = false
-	GROUP BY
-		c.id, c.name;
-	
-END;	
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.team_upsert_user(team_users beyond_boarders.users_model[] DEFAULT NULL::beyond_boarders.users_model[], name character varying DEFAULT NULL::character varying, id bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-	
-	_team_id bigint = COALESCE($3,(SELECT nextval('beyond_boarders.team_id_seq'::regclass))) ;
-	_user_id bigint;
-	_tu beyond_boarders.users_model;
-	cnt bigint;
-BEGIN	
-
-	INSERT INTO beyond_boarders.team(id, name)
-	VALUES (_team_id, $2)
-	ON CONFLICT ON CONSTRAINT team_pkey
-			DO UPDATE 
-			SET name = $2;	
-
-	IF $1 IS NOT NULL THEN
-	
-		--DELETE FROM beyond_boarders.user_member WHERE team_id = _team_id;
-		
-		FOREACH _tu IN ARRAY $1
-		LOOP
-				
-				_user_id =  COALESCE(_tu.id,(SELECT nextval('beyond_boarders.user_id_seq'::regclass))) ;
-						
-				INSERT INTO beyond_boarders.user(first_name, middle_name, last_name, email_address, username, password, salt,  id)
-				VALUES (_tu.first_name, _tu.middle_name, _tu.last_name, _tu.email_address, _tu.username, _tu.password, _tu.salt, _user_id)
-				ON CONFLICT ON CONSTRAINT user_pkey
-						DO UPDATE 
-						SET first_name = _tu.first_name, 
-							middle_name = _tu.middle_name, 
-							last_name = _tu.last_name, 
-							email_address = _tu.email_address;
-							
-				INSERT INTO beyond_boarders.user_member(team_id, user_id)
-				VALUES (_team_id, _user_id)
-				ON CONFLICT ON CONSTRAINT unq_team_user_ids DO NOTHING;
-					
-		END LOOP;
-		
-	END IF;		
-
-	RETURN _team_id;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.client_upsert_clients(client character varying DEFAULT NULL::character varying, id bigint DEFAULT NULL::bigint)
+CREATE OR REPLACE FUNCTION beyond_boarders.team_upsert_client(campaign beyond_boarders.get_campaigns[] DEFAULT NULL::beyond_boarders.get_campaigns[], team_name character varying DEFAULT NULL::character varying, user_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
  RETURNS integer
  LANGUAGE plpgsql
 AS $function$
 
 DECLARE
 
-	_client_id bigint = COALESCE($2,(SELECT nextval('beyond_boarders.client_id_seq'::regclass))) ;
-
-BEGIN	
-
-	INSERT INTO beyond_boarders.client(id, name)
-	VALUES (_client_id, $1)
-	ON CONFLICT ON CONSTRAINT client_pkey
-			DO UPDATE 
-			SET name = $1;
-
-	RETURN _client_id;
-	
-END;
-$function$
-;
-CREATE OR REPLACE FUNCTION beyond_boarders.team_upsert_client(campaign beyond_boarders.get_campaigns[] DEFAULT NULL::beyond_boarders.get_campaigns[], team character varying DEFAULT NULL::character varying, id bigint DEFAULT NULL::bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-
-DECLARE
-
-	_team_id bigint = COALESCE($3,(SELECT nextval('beyond_boarders.team_id_seq'::regclass))) ;
+	_team_id bigint = COALESCE($4,(SELECT nextval('beyond_boarders.team_id_seq'::regclass))) ;
 	_cc beyond_boarders.get_campaigns;
 	
 BEGIN	
 	
-	INSERT INTO beyond_boarders.team(id, name)
-	VALUES (_team_id, $2)
+	INSERT INTO beyond_boarders.team(id, name, last_touched_by)
+	VALUES (_team_id, $2, $3)
 	ON CONFLICT ON CONSTRAINT team_pkey
 			DO UPDATE 
-			SET name = $2;	
+			SET name = $2,
+				last_touched_by = $3;	
 			
 	IF $1 IS NOT NULL THEN
 		FOREACH _cc IN ARRAY $1
@@ -1538,112 +1629,577 @@ BEGIN
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.client_upsert_clientcampaigns(client_id bigint, campaign_name character varying, id bigint DEFAULT NULL::bigint)
+CREATE OR REPLACE FUNCTION beyond_boarders.client_delete_clients(id bigint DEFAULT NULL::bigint, user_id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+			
+BEGIN	
+
+	UPDATE beyond_boarders.client c
+	SET  
+		isdeleted = true,
+		last_touched_by = $2
+	WHERE 
+		c.id = $1;
+	RETURN $1;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.team_delete_client(id bigint DEFAULT NULL::bigint, user_id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+			
+BEGIN	
+
+	UPDATE beyond_boarders.team t
+	SET  
+		isdeleted = true
+	WHERE 
+		t.id = $1
+	AND
+		t.last_touched_by = $2;
+		
+	RETURN $1;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.logs_team()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+
+BEGIN
+
+IF TG_OP = 'INSERT' THEN
+	
+		INSERT INTO beyond_boarders.logs( "user_id", object, object_id, action, message)
+		VALUES(
+			NEW.last_touched_by, 'Team', NEW.id, 'Create', 
+			'Created Team ' || NEW.name
+		);
+	
+ELSIF TG_OP = 'UPDATE' THEN
+	
+		IF NEW.name <> OLD.name THEN
+			
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Team', NEW.id, 'Update', 
+				'Updated Team name from ' || 
+				Old.name || 
+				' to ' || 
+				NEW.name 
+			);
+		END IF;
+
+		IF NEW.isdeleted <> OLD.isdeleted THEN
+			INSERT INTO beyond_boarders.logs("user_id", object, object_id, action, message)
+			VALUES(
+				 NEW.last_touched_by, 'Team', NEW.id, 'Delete', 
+				'Deleted Team ' || NEW.name 
+			);
+		END IF;
+END IF;
+RETURN NEW;
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.user_upsert_users(first_name character varying, middle_name character varying, last_name character varying, username character varying, email_address character varying DEFAULT NULL::character varying, team_id bigint DEFAULT NULL::bigint, role character varying DEFAULT NULL::character varying, user_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+	
+	_user_id bigint = COALESCE($9,(SELECT nextval('beyond_boarders.user_id_seq'::regclass))) ;	
+	_role_id bigint = (SELECT r.id FROM beyond_boarders.role r WHERE r.name = $7);
+	
+BEGIN	
+	
+	INSERT INTO beyond_boarders.user(first_name, middle_name, last_name, username, email_address, last_touched_by, id)
+	VALUES ($1, $2, $3, $4, $5, $8 , _user_id)
+	ON CONFLICT ON CONSTRAINT user_pkey
+			DO UPDATE 
+			SET first_name = $1, 
+				middle_name = $2, 
+				last_name = $3, 
+				username = $4,
+				email_address = $5,
+				last_touched_by = $8; 
+		
+	IF $6 IS NOT NULL THEN		
+	
+		INSERT INTO beyond_boarders.user_member(team_id, user_id)
+		VALUES ($6, _user_id)
+		ON CONFLICT ON CONSTRAINT unq_team_user_ids
+				DO UPDATE 
+				SET team_id = $6, 
+					user_id = _user_id;
+					
+	END IF;
+	
+	IF _role_id ISNULL THEN
+	
+		INSERT INTO beyond_boarders.role as r (name)
+		VALUES ($7)
+		RETURNING r.id INTO _role_id;
+		
+	END IF;	
+	
+	DELETE FROM beyond_boarders.user_role u WHERE u.user_id = _user_id; 
+
+	INSERT INTO beyond_boarders.user_role(user_id, role_id)
+	VALUES (_user_id, _role_id);
+
+	RETURN _user_id;
+	
+END;
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.agentnotes_upsert_tagging(account_id bigint, type_of_entry_id bigint DEFAULT NULL::bigint, action_code_id bigint DEFAULT NULL::bigint, place_of_contact_id bigint DEFAULT NULL::bigint, point_of_contact_id bigint DEFAULT NULL::bigint, reasons_for_deliquency_id bigint DEFAULT NULL::bigint, status_id bigint DEFAULT NULL::bigint, payment_type_id bigint DEFAULT NULL::bigint, promise_amount double precision DEFAULT 0, promise_date timestamp without time zone DEFAULT NULL::timestamp without time zone, note_comment text DEFAULT NULL::text, hot_notes text DEFAULT NULL::text, user_id bigint DEFAULT NULL::bigint, id bigint DEFAULT NULL::bigint)
  RETURNS integer
  LANGUAGE plpgsql
 AS $function$
 
 DECLARE
 
-	_campaign_id bigint = COALESCE($3,(SELECT nextval('beyond_boarders.campaign_id_seq'::regclass))) ;
-
-BEGIN	
-
-		
-	INSERT INTO beyond_boarders.campaign(id, client_id, name)
-	VALUES (_campaign_id, $1, $2)
-	ON CONFLICT ON CONSTRAINT campaign_pkey
-			DO UPDATE 
-			SET name = $2;		
-
-	INSERT INTO beyond_boarders.campaign_member(client_id, campaign_id)
-	VALUES ($1, _campaign_id)
-	ON CONFLICT ON CONSTRAINT pk_campaign
-	DO UPDATE SET
-		client_id = $1, 
-		campaign_id = _campaign_id;
+	_agent_notes_id bigint;
 	
-	RETURN _campaign_id;
+BEGIN	
+	
+	INSERT INTO beyond_boarders.agent_notes as ag(
+	account_id, type_of_entry_id, action_code_id, place_of_contact_id, point_of_contact_id, reasons_for_deliquency_id, status_id, payment_type_id, promise_amount, promise_date, note_comment, hot_notes, user_id)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	ON CONFLICT ON CONSTRAINT unq_account_id
+			DO UPDATE 
+			SET 
+				account_id = $1, 
+				type_of_entry_id = $2, 
+				action_code_id = $3, 
+				place_of_contact_id = $4, 
+				point_of_contact_id = $5, 
+				reasons_for_deliquency_id = $6, 
+				status_id = $7, 
+				payment_type_id = $8, 
+				promise_amount = $9, 
+				promise_date = $10, 
+				note_comment = $11, 
+				hot_notes = $12,
+				user_id = $13;
+				
+	INSERT INTO beyond_boarders.agent_notehistory(
+	account_id, type_of_entry_id, action_code_id, place_of_contact_id, point_of_contact_id, reasons_for_deliquency_id, status_id, payment_type_id, promise_amount, promise_date, note_comment, hot_notes, user_id)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)	ON CONFLICT ON CONSTRAINT unq_created_date
+			DO UPDATE 
+			SET account_id = $1, 
+				type_of_entry_id = $2, 
+				action_code_id = $3, 
+				place_of_contact_id = $4, 
+				point_of_contact_id = $5, 
+				reasons_for_deliquency_id = $6, 
+				status_id = $7, 
+				payment_type_id = $8, 
+				promise_amount = $9, 
+				promise_date = $10, 
+				note_comment = $11, 
+				hot_notes = $12,
+				user_id = $13;
+				
+	
+	RETURN $1;
 	
 END;
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.team_select_client(campaign_id bigint DEFAULT NULL::bigint, team_name character varying DEFAULT NULL::character varying)
- RETURNS TABLE(id bigint, team character varying, campaigns beyond_boarders.campaigns[], users beyond_boarders.get_users[])
+CREATE OR REPLACE FUNCTION beyond_boarders.bucket_select_accounts(campaign_id bigint, bucket_id bigint DEFAULT NULL::bigint, account_id bigint DEFAULT NULL::bigint)
+ RETURNS TABLE(id bigint, bucketid bigint, bucket_name character varying, account beyond_boarders.account, contact beyond_boarders.contact, product beyond_boarders.product, cdf beyond_boarders.cdf_info, agent_notes beyond_boarders.agentnotes[])
  LANGUAGE plpgsql
 AS $function$
 	
 BEGIN
 
 	RETURN QUERY 
-	WITH team as (
-			SELECT 
-				t.id, t.name,  
-				coalesce(array_agg((ca.id,ca.name,c.name)::beyond_boarders.campaigns ) filter (where ca.id is not null),  '{}') team--,
-			FROM  
-				beyond_boarders.team t
-			LEFT JOIN
-				beyond_boarders.team_member tm ON tm.team_id = t.id
-			LEFT JOIN
-				beyond_boarders.campaign ca ON ca.id = tm.campaign_id
-			LEFT JOIN
-				beyond_boarders.campaign_member cm ON cm.campaign_id = ca.id
-			LEFT JOIN
-				beyond_boarders.client c ON c.id = cm.client_id
-			WHERE 
-				($1 ISNULL OR ca.id = $1)
-			AND
-				($2 ISNULL OR t.name ilike '%' || $2 || '%')
-			AND
-			 	t.isdeleted = false
-			GROUP BY t.id, t.name
-			ORDER BY t.name
+	
+	WITH agent_notes as (
+		SELECT
+			an.account_id,
+			ARRAY_AGG((
+				an.id,
+				an.account_id,
+				toe.description, 
+				ac.description, 
+				poc.description, 
+				pocn.description ,
+				rfd.description, 
+				s.description, 
+				pt.description,
+				an.promise_amount,
+				an.promise_date,
+				an.note_comment,
+				an.hot_notes ,
+				an.created_date,
+				(u.first_name || ' ' || u.last_name)::character varying
+				)::beyond_boarders.agentnotes ORDER BY an.created_date desc
+			) notes
+		FROM
+			beyond_boarders.agent_notehistory an 
+		LEFT JOIN
+			beyond_boarders.picklist_type_of_entry toe ON toe.id = an.type_of_entry_id
+		LEFT JOIN
+			beyond_boarders.picklist_action_code ac ON ac.id = an.action_code_id
+		LEFT JOIN
+			beyond_boarders.picklist_place_of_contact poc ON poc.id = an.place_of_contact_id	
+		LEFT JOIN
+			beyond_boarders.picklist_point_of_contact pocn ON pocn.id = an.point_of_contact_id	
+		LEFT JOIN
+			beyond_boarders.picklist_reasons_for_delinquency rfd ON rfd.id = an.reasons_for_deliquency_id
+		LEFT JOIN
+			beyond_boarders.picklist_status s ON s.id = an.status_id	
+		LEFT JOIN
+			beyond_boarders.picklist_payment_type pt ON pt.id = an.payment_type_id
+		LEFT JOIN
+			beyond_boarders.user u ON u.id =  an.user_id
+		WHERE 
+			($3 ISNULL OR an.account_id = $3)
+		GROUP BY an.account_id
 	)
 	SELECT 
-		t.id, t.name, t.team,
-		COALESCE(
-			ARRAY_AGG((u.id, u.first_name, u.middle_name, u.last_name, u.email_address, u.username)::beyond_boarders.get_users)
-		filter (where u.id is not null),  '{}')
-	FROM team t
+		ai.id, cb.bucket_id, b.name,
+		(
+			ai.id,
+			ai.account_number,
+			ai.original_amount_balance,
+			ai.outstanding_balance,
+			ai.partial_payment,
+			ai.last_payment_amount,
+			ai.last_payment_date,
+			ai.endorsement_date,
+			ai.expiry_date,
+			ai.spn_account_number
+		)::beyond_boarders.account,
+		(
+			ci.name,
+			ci.birthday,
+			ci.email_address,
+			ci.landline_1,
+			ci.landline_2,
+			ci.landline_3,
+			ci.mobilenumber_1,
+			ci.mobilenumber_2,
+			ci.mobilenumber_3,
+			ci.home_address,
+			ci.barangay,
+			ci.city,
+			ci.zip_code,
+			ci.province,
+			ci.company,
+			ci.company_address,
+			ci.company_contact
+		)::beyond_boarders.contact,
+		(
+			pi.product_type,
+			pi.age_bucket,
+			pi.brand,
+			pi.model,
+			pi.type,
+			pi.color,
+			pi.plate_number,
+			pi.engine_number,
+			pi.chasis_number,
+			pi.description,
+			pi.originating_branch
+		)::beyond_boarders.product,	
+		(
+			c.data01,
+			c.data02,
+			c.data03,
+			c.data04,
+			c.data05,
+			c.data06,
+			c.data07,
+			c.data08,
+			c.data09,
+			c.data10,
+			c.data11,
+			c.data12,
+			c.data13,
+			c.data14,
+			c.data15,
+			c.data16,
+			c.data17,
+			c.data18,
+			c.data19,
+			c.data20,
+			c.data21,
+			c.data22,
+			c.data23,
+			c.data24,
+			c.data25,
+			c.data26,
+			c.data27,
+			c.data28,
+			c.data29,
+			c.data30,
+			c.data31,
+			c.data32,
+			c.data33,
+			c.data34,
+			c.data35,
+			c.data36,
+			c.data37,
+			c.data38,
+			c.data39,
+			c.data40,
+			c.data41,
+			c.data42,
+			c.data43,
+			c.data44,
+			c.data45,
+			c.data46,
+			c.data47,
+			c.data48,
+			c.data49,
+			c.data50
+		)::beyond_boarders.cdf_info,
+			an.notes
+	FROM
+		beyond_boarders.bucket b
+	INNER JOIN
+		beyond_boarders.campaign_bucket cb on cb.bucket_id = b.id
+	INNER JOIN
+		beyond_boarders.account_information ai ON ai.bucket_id = b.id
 	LEFT JOIN
-		beyond_boarders.user_member um ON um.team_id = t.id
+		beyond_boarders.contact_information ci ON ai.id = ci.account_id
 	LEFT JOIN
-		beyond_boarders.user u ON u.id = um.user_id
-	GROUP BY t.id, t.name, t.team;
+		beyond_boarders.product_information pi ON ai.id = pi.account_id
+	LEFT JOIN
+		beyond_boarders.cdf c ON ai.id = c.account_id
+	LEFT JOIN
+		agent_notes an ON an.account_id = ai.id
+	WHERE 
+		cb.campaign_id = $1
+	AND
+		($2 ISNULL OR cb.bucket_id = $2)
+	AND
+		($3 ISNULL OR ai.id = $3)
+	ORDER BY ai.account_number;
+	
+ END;	
+ 
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.change_password(id bigint, salt character varying, new_password character varying, old_password character varying DEFAULT NULL::character varying)
+ RETURNS boolean
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+
+	user_id bigint;
+	with_pw character varying;
+	success boolean;
+	
+BEGIN
+		
+		SELECT
+		 		(password = encode(sha256(exts.text2bytea($4 || 'aRxyzL' || u.salt)), 'base64')),
+				 u.id,
+				 password
+			INTO 
+				success,
+				user_id,
+				with_pw
+		FROM
+			beyond_boarders.user as u 
+		WHERE
+			u.id = $1; 
+
+	IF (user_id IS NOT NULL AND with_pw ISNULL ) THEN
+
+			UPDATE 
+				beyond_boarders.user as u 
+			SET
+				password = $3,
+				salt = $2
+			WHERE u.id = $1;
+			
+	ELSIF (with_pw IS NOT NULL AND success = true)  THEN
+
+			UPDATE 
+				beyond_boarders.user as u 
+			SET
+				password = $3,
+				salt = $2
+			WHERE u.id = $1;	
+			
+	ELSIF with_pw IS NOT NULL AND success = FALSE THEN
+
+			RAISE EXCEPTION 'Old password is incorrect'; 
+			
+	ELSE
+
+			RAISE EXCEPTION 'User not found';
+			
+	END IF;	
+	
+	RETURN success;
 	
 END;	
 $function$
 ;
-CREATE OR REPLACE FUNCTION beyond_boarders.user_select_users(team_id bigint DEFAULT NULL::bigint, filter character varying DEFAULT NULL::character varying)
- RETURNS TABLE(id bigint, first_name character varying, middle_name character varying, last_name character varying, email_address character varying, username character varying, role character varying, team beyond_boarders.users_team[])
+CREATE OR REPLACE FUNCTION beyond_boarders.bucket_select_accountlist(campaign_id bigint, bucket_id bigint DEFAULT NULL::bigint, after integer DEFAULT NULL::integer, count integer DEFAULT NULL::integer)
+ RETURNS TABLE(id bigint, account_number character varying, client_name character varying, landline character varying, mobilenumber character varying, original_amount_balance double precision, action_code character varying, point_on_contact character varying, place_of_contact character varying, type_of_entry character varying, status character varying, agent_name character varying, created_date timestamp without time zone)
  LANGUAGE plpgsql
 AS $function$
 	
 BEGIN
 
 	RETURN QUERY 
-	SELECT 
-		u.id, u.first_name, u.middle_name, u.last_name, u.email_address, u.username, r.name,
-		COALESCE(ARRAY_AGG((t.id,t.name)::beyond_boarders.users_team) filter (where u.id is not null),  '{}')
-	FROM  
+	
+
+		SELECT
+				ci.id,
+				ai.account_number,
+				ci.name,
+				(ci.landline_1 || '-' || ci.landline_2 || '-' || ci.landline_3)::character varying,
+				(ci.mobilenumber_1 || '-' || ci.mobilenumber_2 || '-' || ci.mobilenumber_3)::character varying,
+				ai.original_amount_balance,
+				ac.description, 
+				pocn.description ,
+				poc.description,
+				toe.description, 
+				s.description, 
+				(u.first_name || ' ' || u.last_name)::character varying,
+				an.created_date
+						
+		FROM
+			beyond_boarders.account_information ai
+		LEFT JOIN
+			beyond_boarders.bucket b ON ai.bucket_id = b.id
+		LEFT JOIN
+			beyond_boarders.campaign_bucket cb ON cb.bucket_id  = b.id
+		LEFT JOIN
+			beyond_boarders.contact_information ci ON ci.account_id = ai.id
+		LEFT JOIN
+			beyond_boarders.agent_notes an ON an.account_id = ai.id
+		LEFT JOIN
+			beyond_boarders.picklist_type_of_entry toe ON toe.id = an.type_of_entry_id
+		LEFT JOIN
+			beyond_boarders.picklist_action_code ac ON ac.id = an.action_code_id
+		LEFT JOIN
+			beyond_boarders.picklist_place_of_contact poc ON poc.id = an.place_of_contact_id	
+		LEFT JOIN
+			beyond_boarders.picklist_point_of_contact pocn ON pocn.id = an.point_of_contact_id	
+		-- LEFT JOIN
+		-- 	beyond_boarders.picklist_reasons_for_delinquency rfd ON rfd.id = an.reasons_for_deliquency_id
+		LEFT JOIN
+			beyond_boarders.picklist_status s ON s.id = an.status_id	
+		-- LEFT JOIN
+		-- 	beyond_boarders.picklist_payment_type pt ON pt.id = an.payment_type_id
+		LEFT JOIN
+			beyond_boarders.user u ON u.id =  an.user_id
+		WHERE 
+			cb.campaign_id = $1
+		AND
+			($2 ISNULL OR cb.bucket_id = $2)
+		ORDER BY an.created_date desc
+		OFFSET ($3) LIMIT ($4);
+	
+ END;	
+ 
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.user_select_appusers(username character varying)
+ RETURNS TABLE(id bigint, first_name character varying, middle_name character varying, last_name character varying, role character varying, usernme character varying, passwordhash character varying, passwordsalt character varying, teams beyond_boarders.teams[])
+ LANGUAGE plpgsql
+AS $function$
+
+BEGIN
+
+	RETURN QUERY 
+	SELECT
+		u.id, u.first_name, u.middle_name, u.last_name, r.name, u.username, u.password, u.salt, 
+		COALESCE(array_agg((t.id, t.name, t.campaign_member)::beyond_boarders.teams) filter (where t.id is not null),  '{}')
+		--ARRAY_AGG(t.campaign_member)
+	FROM
 		beyond_boarders.user u
 	LEFT JOIN 
 		beyond_boarders.user_role ur on ur.user_id = u.id
 	LEFT JOIN
-		beyond_boarders.role r on r.id = ur.role_id	
+		beyond_boarders.role r on r.id = ur.role_id
 	LEFT JOIN
-		beyond_boarders.user_member um ON u.id = um.user_id
-	LEFT JOIN
-		beyond_boarders.team t ON t.id = um.team_id
-	WHERE 
-		($1 ISNULL OR t.id = $1)
-	AND
-		($2 ISNULL OR u.first_name || u.middle_name || u.last_name || u.username ||  u.email_address ilike '%' || $2 ||'%')
- 	AND 
-	 	u.isdeleted = false
-	GROUP BY u.id, u.first_name, u.middle_name, u.last_name, u.email_address, u.username, r.name
-	ORDER BY u.first_name;
-	
+		beyond_boarders.user_member um on um.user_id = u.id
+	LEFT JOIN (
+				SELECT 
+					t.id, t.name, COALESCE(array_agg((ca.id, ca.name, c.name)::beyond_boarders.campaigns) filter (where ca.id is not null),  '{}') campaign_member
+				FROM
+					beyond_boarders.client c
+				INNER JOIN	
+					beyond_boarders.campaign_member cm ON c.id = cm.client_id	
+				INNER JOIN
+					beyond_boarders.campaign ca ON ca.id = cm.campaign_id
+				INNER JOIN
+					beyond_boarders.team_member tm ON ca.id = tm.campaign_id
+				INNER JOIN	
+					beyond_boarders.team t ON t.id = tm.team_id
+				WHERE
+					ca.name is not null
+				GROUP BY
+					t.id, t.name
+					) t on t.id = um.team_id
+	WHERE
+		u.username = $1
+	GROUP BY u.id, u.first_name, u.middle_name, u.last_name, r.name;
 END;	
+$function$
+;
+CREATE OR REPLACE FUNCTION beyond_boarders.bucket_count_accountlist(campaign_id bigint, bucket_id bigint DEFAULT NULL::bigint, after integer DEFAULT NULL::integer, count integer DEFAULT NULL::integer)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+	
+BEGIN
+	--RAISE EXCEPTION '%,%', $3, $4;
+	RETURN 
+	(
+		SELECT
+			COUNT(1)	
+		FROM
+			beyond_boarders.account_information ai
+		LEFT JOIN
+			beyond_boarders.bucket b ON ai.bucket_id = b.id
+		LEFT JOIN
+			beyond_boarders.campaign_bucket cb ON cb.bucket_id  = b.id
+		LEFT JOIN
+			beyond_boarders.contact_information ci ON ci.account_id = ai.id
+		LEFT JOIN
+			beyond_boarders.agent_notes an ON an.account_id = ai.id
+		LEFT JOIN
+			beyond_boarders.picklist_type_of_entry toe ON toe.id = an.type_of_entry_id
+		LEFT JOIN
+			beyond_boarders.picklist_action_code ac ON ac.id = an.action_code_id
+		LEFT JOIN
+			beyond_boarders.picklist_place_of_contact poc ON poc.id = an.place_of_contact_id	
+		LEFT JOIN
+			beyond_boarders.picklist_point_of_contact pocn ON pocn.id = an.point_of_contact_id	
+		-- LEFT JOIN
+		-- 	beyond_boarders.picklist_reasons_for_delinquency rfd ON rfd.id = an.reasons_for_deliquency_id
+		LEFT JOIN
+			beyond_boarders.picklist_status s ON s.id = an.status_id	
+		-- LEFT JOIN
+		-- 	beyond_boarders.picklist_payment_type pt ON pt.id = an.payment_type_id
+		LEFT JOIN
+			beyond_boarders.user u ON u.id =  an.user_id
+		WHERE 
+			cb.campaign_id = $1
+		AND
+			($2 ISNULL OR cb.bucket_id = $2)
+	);
+	
+ END;	
+ 
 $function$
 ;
